@@ -22,10 +22,17 @@ class PipelineMixin:
         self.pipeline_size = group.size()
         n_layers = len(self.layers)
 
-        # Gather memory from all ranks
-        local_mem = psutil.virtual_memory().total
+        # Gather available memory from all ranks
+        # Use Metal working set (~94% of RAM) minus minimum headroom (25GB)
+        import mlx.core as mx_info
+        if mx_info.metal.is_available():
+            local_ws = mx_info.device_info().get('max_recommended_working_set_size', psutil.virtual_memory().total * 0.94)
+        else:
+            local_ws = psutil.virtual_memory().total * 0.94
+        min_headroom = 25 * (1024**3)  # 25GB for KV cache + compute
+        local_avail = max(local_ws - min_headroom, 1024**3)  # At least 1GB
         all_mem = mx.distributed.all_gather(
-            mx.array([local_mem], dtype=mx.float32), group=group
+            mx.array([local_avail], dtype=mx.float32), group=group
         )
         mx.eval(all_mem)
         mem_list = [float(all_mem[i].item()) for i in range(self.pipeline_size)]
