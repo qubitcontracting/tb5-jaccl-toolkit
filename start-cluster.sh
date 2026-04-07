@@ -10,7 +10,7 @@
 set -e
 
 # Defaults
-MODEL="${1:-/Users/thomas/.exo/models/huggingface/mlx-community--Qwen3-235B-A22B-Instruct-2507-8bit}"
+MODEL="/Users/thomas/.exo/models/huggingface/mlx-community--Qwen3-235B-A22B-Instruct-2507-8bit"
 NODES=""
 PORT=8888
 PYTHON=/Users/thomas/exo-src/.venv/bin/python3
@@ -22,6 +22,7 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --nodes) NODES="$2"; shift 2 ;;
         --port) PORT="$2"; shift 2 ;;
+        --*) echo "Unknown option: $1"; exit 1 ;;
         *) MODEL="$1"; shift ;;
     esac
 done
