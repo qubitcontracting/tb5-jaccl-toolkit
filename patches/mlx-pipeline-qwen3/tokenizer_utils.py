@@ -500,9 +500,6 @@ def _infer_tool_parser(chat_template):
     elif "[TOOL_CALLS]" in chat_template:
         return "mistral"
     elif "<tool_call>" in chat_template and "tool_call.name" in chat_template:
-        # Qwen3 Instruct models use <|python_tag|> output despite template saying <tool_call>
-        if "im_start" in chat_template and "<function=" not in chat_template:
-            return "qwen3_instruct"
         return "json_tools"
     return None
 
