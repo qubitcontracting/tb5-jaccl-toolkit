@@ -90,7 +90,9 @@ fi
 # Launch distributed
 echo "Starting server on port $PORT..."
 echo "Model: $(basename $MODEL)"
-exec $MLX_LAUNCH \
+
+# Start server in background, then warmup
+$MLX_LAUNCH \
     --hostfile "$HOSTFILE" \
     --backend jaccl \
     --python "$PYTHON" \
@@ -98,4 +100,22 @@ exec $MLX_LAUNCH \
     --model "$MODEL" \
     --host 0.0.0.0 --port $PORT \
     --trust-remote-code --decode-concurrency 1 \
-    $PARALLEL
+    $PARALLEL &
+SERVER_PID=$!
+
+# Wait for server to be ready, then warmup
+echo "Waiting for server..."
+for i in $(seq 1 60); do
+    if curl -s --max-time 5 http://localhost:$PORT/v1/models >/dev/null 2>&1; then
+        echo "Server ready, running warmup..."
+        curl -s --max-time 60 http://localhost:$PORT/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -d '{"model":"default_model","messages":[{"role":"user","content":"Hi"}],"max_tokens":10}' >/dev/null 2>&1
+        echo "Warmup complete — server ready for requests"
+        break
+    fi
+    sleep 5
+done
+
+# Keep running
+wait $SERVER_PID
