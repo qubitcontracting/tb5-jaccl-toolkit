@@ -76,8 +76,8 @@ if [ "$NODES" = "3" ]; then
     echo "Mode: 3-node pipeline parallel"
 elif [ "$NODES" = "2" ]; then
     HOSTFILE="$CONFIG_DIR/jaccl-hosts-2node.json"
-    PARALLEL=""  # tensor parallel (default) for 2-node
-    echo "Mode: 2-node tensor parallel"
+    PARALLEL="--pipeline"  # pipeline parallel (tensor OOMs on large models)
+    echo "Mode: 2-node pipeline parallel"
 else
     # Single node - just run mlx_lm.server directly
     echo "Mode: single node"
