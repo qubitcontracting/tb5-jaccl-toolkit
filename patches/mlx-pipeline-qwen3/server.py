@@ -1539,11 +1539,22 @@ class APIHandler(BaseHTTPRequestHandler):
                 return []
             result = []
             for tool_text in tool_calls:
-                parsed = ctx.tool_parser(tool_text, request.tools)
-                if isinstance(parsed, list):
-                    result.extend(format_tool_call(tc) for tc in parsed)
-                else:
-                    result.append(format_tool_call(parsed))
+                try:
+                    parsed = ctx.tool_parser(tool_text, request.tools)
+                    if isinstance(parsed, list):
+                        result.extend(format_tool_call(tc) for tc in parsed)
+                    else:
+                        result.append(format_tool_call(parsed))
+                except (ValueError, KeyError, json.JSONDecodeError):
+                    # Fallback: try JSON parsing if XML parser fails
+                    try:
+                        parsed = json.loads(tool_text.strip())
+                        if "parameters" in parsed and "arguments" not in parsed:
+                            parsed["arguments"] = parsed.pop("parameters")
+                        if "name" in parsed and "arguments" in parsed:
+                            result.append(format_tool_call(parsed))
+                    except (json.JSONDecodeError, KeyError):
+                        pass
             return result
 
         # Start out in reasoning if the model is a reasoning model and the
