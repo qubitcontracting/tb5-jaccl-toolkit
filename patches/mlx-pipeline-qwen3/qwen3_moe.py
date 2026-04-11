@@ -9,7 +9,6 @@ import mlx.nn as nn
 from .activations import swiglu
 from .base import BaseModelArgs, create_attention_mask, scaled_dot_product_attention
 from .pipeline import PipelineMixin
-from mlx.nn.layers.distributed import shard_inplace, shard_linear
 from .switch_layers import SwitchGLU
 
 
@@ -198,30 +197,37 @@ class Qwen3MoeModel(PipelineMixin, nn.Module):
         else:
             h = self.embed_tokens(inputs)
 
-        pipeline_rank = self.pipeline_rank
-        pipeline_size = self.pipeline_size
-
         if cache is None:
             cache = [None] * len(self.pipeline_layers)
 
         mask = create_attention_mask(h, cache[0], return_array=True)
 
-        # Receive from the previous process in the pipeline
-        if pipeline_rank < pipeline_size - 1:
-            h = mx.distributed.recv_like(h, (pipeline_rank + 1))
+        # In pipeline parallel, receive hidden state from the next rank
+        # (which processed earlier layers)
+        if self.pipeline_rank < self.pipeline_size - 1:
+            h = mx.distributed.recv_like(h, self.pipeline_rank + 1)
 
         for layer, c in zip(self.pipeline_layers, cache):
             h = layer(h, mask, cache=c)
 
-        # Send to the next process in the pipeline
-        if pipeline_rank != 0:
-            h = mx.distributed.send(h, (pipeline_rank - 1) % pipeline_size)
+        # Send hidden state to the previous rank (which has later layers)
+        if self.pipeline_rank != 0:
+            h = mx.distributed.send(h, (self.pipeline_rank - 1) % self.pipeline_size)
 
-        # Broadcast h so all ranks have the final output
-        if pipeline_size > 1:
-            h = mx.distributed.all_gather(h)[:h.shape[0]]
+        # All ranks need the final output for lm_head
+        if self.pipeline_size > 1:
+            h = mx.distributed.all_gather(h)[: h.shape[0]]
 
         return self.norm(h)
+
+    def make_cache(self):
+        """Return KV cache entries only for this rank's layers."""
+        from .cache import KVCache
+
+        return [
+            KVCache()
+            for _ in self.pipeline_layers
+        ]
 
 
 class Model(nn.Module):
@@ -232,64 +238,6 @@ class Model(nn.Module):
         self.model = Qwen3MoeModel(args)
         if not args.tie_word_embeddings:
             self.lm_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
-
-    def shard(self, group=None):
-        import mlx.core as mx
-        group = group or mx.distributed.init()
-        N = group.size()
-
-        for layer in self.model.layers:
-            if layer is None:
-                continue
-
-            # Shard attention Q/K/V projections (all-to-sharded)
-            layer.self_attn.q_proj = shard_linear(
-                layer.self_attn.q_proj, "all-to-sharded", group=group
-            )
-            layer.self_attn.k_proj = shard_linear(
-                layer.self_attn.k_proj, "all-to-sharded", group=group
-            )
-            layer.self_attn.v_proj = shard_linear(
-                layer.self_attn.v_proj, "all-to-sharded", group=group
-            )
-            layer.self_attn.o_proj = shard_linear(
-                layer.self_attn.o_proj, "sharded-to-all", group=group
-            )
-            layer.self_attn.n_heads //= N
-            layer.self_attn.n_kv_heads //= N
-
-            # Shard MoE experts
-            if hasattr(layer.mlp, 'switch_mlp'):
-                layer.mlp.sharding_group = group
-                shard_inplace(
-                    layer.mlp.switch_mlp.gate_proj, "all-to-sharded", group=group
-                )
-                shard_inplace(
-                    layer.mlp.switch_mlp.down_proj, "sharded-to-all", group=group
-                )
-                shard_inplace(
-                    layer.mlp.switch_mlp.up_proj, "all-to-sharded", group=group
-                )
-            # Shard dense MLP (non-MoE layers)
-            elif hasattr(layer.mlp, 'gate_proj'):
-                layer.mlp.gate_proj = shard_linear(
-                    layer.mlp.gate_proj, "all-to-sharded", group=group
-                )
-                layer.mlp.down_proj = shard_linear(
-                    layer.mlp.down_proj, "sharded-to-all", group=group
-                )
-                layer.mlp.up_proj = shard_linear(
-                    layer.mlp.up_proj, "all-to-sharded", group=group
-                )
-
-    @property
-    def layers(self):
-        # Return pipeline_layers for cache creation
-        return self.model.pipeline_layers
-
-    def make_cache(self):
-        from mlx_lm.models.cache import KVCache
-        return [KVCache() for _ in self.model.pipeline_layers]
 
     def __call__(
         self,
@@ -328,6 +276,12 @@ class Model(nn.Module):
             return True
 
         return predicate
+
+    def make_cache(self):
+        if hasattr(self.model, "make_cache"):
+            return self.model.make_cache()
+        from .cache import KVCache
+        return [KVCache() for _ in self.model.layers]
 
     @property
     def layers(self):

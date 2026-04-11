@@ -19,12 +19,6 @@ from typing import (
 )
 
 import mlx.core as mx
-
-# Pipeline sync helper - ensures all ranks evaluate together
-def _pipeline_sync():
-    if mx.distributed.init().size() > 1:
-        return mx.distributed.all_sum(mx.zeros(1))
-    return None
 import mlx.nn as nn
 from mlx.utils import tree_reduce
 from transformers import PreTrainedTokenizer
@@ -43,6 +37,13 @@ from .models.cache import (
 from .sample_utils import make_sampler
 from .tokenizer_utils import TokenizerWrapper
 from .utils import does_model_support_input_embeddings, load
+
+def _pipeline_sync():
+    """Return a collective op that forces all pipeline ranks to eval together."""
+    group = mx.distributed.init()
+    if group.size() > 1:
+        return mx.distributed.all_sum(mx.zeros(1))
+    return None
 
 DEFAULT_PROMPT = "hello"
 DEFAULT_MAX_TOKENS = 100
@@ -441,8 +442,6 @@ def generate_step(
                 ),
             )
             quantize_cache_fn(prompt_cache)
-            # For pipeline models, eval logits (includes distributed ops in graph)
-            # instead of just cache states (which miss pipeline recv/send)
             _sync = _pipeline_sync()
             if _sync is not None:
                 mx.eval(_prefill_logits, _sync)
@@ -469,8 +468,8 @@ def generate_step(
     while True:
         if n != max_tokens:
             next_y, next_logprobs = _step(y)
-            _sync = _pipeline_sync()
             if _sync is not None:
+                _sync = _pipeline_sync()
                 mx.eval(next_y, next_logprobs, _sync)
             else:
                 mx.async_eval(next_y, next_logprobs)
@@ -1124,12 +1123,7 @@ class BatchGenerator:
                     self.prefill_step_size, inputs.shape[1] - prompt_checkpoint
                 )
                 self.model(inputs[:, :n_to_process], cache=prompt_cache)
-                _cs = [c.state for c in prompt_cache if hasattr(c, 'keys') and c.keys is not None]
-                _ps = _pipeline_sync()
-                if _ps is not None:
-                    mx.eval(*_cs, _ps) if _cs else mx.eval(_ps)
-                elif _cs:
-                    mx.eval(_cs)
+                mx.eval([c.state for c in prompt_cache])
                 inputs = inputs[:, n_to_process:]
                 processed_tokens += n_to_process
                 self.prompt_progress_callback(
@@ -1163,12 +1157,7 @@ class BatchGenerator:
                     self.prefill_step_size, inputs.shape[1] - prompt_checkpoint
                 )
                 self.model(inputs[:, :n_to_process], cache=prompt_cache)
-                _cs = [c.state for c in prompt_cache if hasattr(c, 'keys') and c.keys is not None]
-                _ps = _pipeline_sync()
-                if _ps is not None:
-                    mx.eval(*_cs, _ps) if _cs else mx.eval(_ps)
-                elif _cs:
-                    mx.eval(_cs)
+                mx.eval([c.state for c in prompt_cache])
                 inputs = inputs[:, n_to_process:]
                 processed_tokens += n_to_process
                 self.prompt_progress_callback(
@@ -1280,11 +1269,7 @@ class BatchGenerator:
             # Process prompts
             if batch is not None and not prompt_processing:
                 # Finish any active completion tokens
-                _ps = _pipeline_sync()
-                if _ps is not None:
-                    mx.eval(batch.y, batch.logprobs, _ps)
-                else:
-                    mx.eval(batch.y, batch.logprobs)
+                mx.eval(batch.y, batch.logprobs)
                 self._stats.generation_time += time.perf_counter() - tic
                 tic = time.perf_counter()
 
