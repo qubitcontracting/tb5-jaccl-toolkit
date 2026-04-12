@@ -55,12 +55,15 @@ ssh -o ConnectTimeout=3 gargamel "true" 2>/dev/null && GARGAMEL_UP=true
 if [ -z "$NODES" ]; then
     if $VOLDEMORT_UP && $GARGAMEL_UP; then NODES=3
     elif $VOLDEMORT_UP; then NODES=2
-    else
-        echo "No remote nodes available. Running single-node." | tee -a "$LOG"
-        exec $PYTHON -m mlx_lm.server --model "$MODEL" --host 0.0.0.0 --port $PORT
+    else NODES=1
     fi
 fi
 echo "Nodes: $NODES" | tee -a "$LOG"
+
+if [ "$NODES" = "1" ]; then
+    echo "Single-node mode." | tee -a "$LOG"
+    exec $PYTHON -m mlx_lm.server --model "$MODEL" --host 0.0.0.0 --port $PORT
+fi
 
 # ── Deploy patches ──
 PATCHES="$TOOLKIT/patches/mlx-pipeline-qwen3"
