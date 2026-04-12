@@ -26,6 +26,7 @@ Distributed pipeline inference for large MoE models on Apple Silicon over Thunde
 |--------|-------|---------|---------|------------|
 | 3-node | 70/14/10 | ~60s | 0.4s | 11.3 tok/s |
 | 2-node | 80/14 | ~60s | 0.35s | 17.8 tok/s |
+| 1-node | — | ~5s | — | model-dependent |
 
 ## Quick Start
 
@@ -38,8 +39,14 @@ bash ~/.config/mlx/start-cluster.sh
 # Force 2-node
 bash ~/.config/mlx/start-cluster.sh --nodes 2
 
+# Single-node (for models that fit on vader alone)
+bash ~/.config/mlx/start-cluster.sh --nodes 1
+
 # Custom model
 bash ~/.config/mlx/start-cluster.sh /path/to/model
+
+# Custom model + node count
+bash ~/.config/mlx/start-cluster.sh --nodes 1 /path/to/small-model
 
 # Stop server
 bash ~/.config/mlx/start-cluster.sh --stop
@@ -49,7 +56,9 @@ The script handles everything: patch deployment, RDMA bounce, device matrix, ser
 
 ## What start-cluster.sh Does
 
-1. **Detects nodes** — SSHs to voldemort and gargamel, picks 2 or 3 node config
+1. **Detects nodes** — SSHs to voldemort and gargamel, picks 1, 2, or 3 node config
+   - **Single-node**: Restores stock mlx_lm (pipeline patches break BatchGenerator), runs server directly
+   - **Multi-node**: Continues with steps 2-9 below
 2. **Deploys patches** — Copies ALL files from `~/tb5-jaccl-toolkit/patches/mlx-pipeline-qwen3/` to `mlx_lm` site-packages on every node. Patches `utils.py` in-place for warmup call.
 3. **Kills stale processes** — Any leftover mlx_lm/server-wrapper processes
 4. **Bounces RDMA** — Down all TB interfaces, 15s cooldown, up with correct IPs, 5s settle
@@ -85,6 +94,12 @@ if self.pipeline_group is not None:
 ```
 
 This forces the server to use the single-request `stream_generate` → `generate_step` path which has our pipeline sync patches.
+
+### Version Compatibility Note
+
+The toolkit's `server.py` is based on 0.31.1. Stock 0.31.2's `server.py` has a `rfind_think_start` bug with Qwen3 tokenizers and is NOT used. The toolkit's `generate.py` is stock 0.31.2 with `_pipeline_sync` patches applied in-place — this preserves `BatchGenerator` compatibility for single-node mode.
+
+Single-node mode restores stock mlx_lm via `pip install --force-reinstall` before launching, because the toolkit's 0.31.1 `server.py` calls `BatchGenerator` with arguments that don't exist in 0.31.2's `generate.py`.
 
 ### Why pipeline_warmup() is Needed
 
