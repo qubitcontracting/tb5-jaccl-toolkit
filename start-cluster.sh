@@ -62,6 +62,8 @@ echo "Nodes: $NODES" | tee -a "$LOG"
 
 if [ "$NODES" = "1" ]; then
     echo "Single-node mode." | tee -a "$LOG"
+    # Restore stock mlx_lm (pipeline patches break single-node BatchGenerator)
+    $PYTHON -m pip install mlx-lm --force-reinstall --no-deps --break-system-packages -q 2>/dev/null
     exec $PYTHON -m mlx_lm.server --model "$MODEL" --host 0.0.0.0 --port $PORT
 fi
 
@@ -85,11 +87,10 @@ for node in $NODES_LIST; do
         for f in pipeline.py qwen3_moe.py minimax.py; do
             [ -f "$PATCHES/$f" ] && cp "$PATCHES/$f" "$SITE/models/$f"
         done
-        for f in generate.py tokenizer_utils.py; do
+        for f in generate.py server.py tokenizer_utils.py; do
             [ -f "$PATCHES/$f" ] && cp "$PATCHES/$f" "$SITE/$f"
         done
-        # In-place patches (version-independent)
-        [ -f "$PATCHES/patch_server.py" ] && $PYTHON "$PATCHES/patch_server.py" "$SITE/server.py"
+        # In-place patches
         [ -f "$PATCHES/patch_utils.py" ] && $PYTHON "$PATCHES/patch_utils.py" "$SITE/utils.py"
         $PYTHON -c 'import psutil' 2>/dev/null || $PYTHON -m pip install psutil -q 2>/dev/null || true
         echo "  local: patched" | tee -a "$LOG"
@@ -98,11 +99,11 @@ for node in $NODES_LIST; do
         for f in pipeline.py qwen3_moe.py minimax.py; do
             [ -f "$PATCHES/$f" ] && scp -q "$PATCHES/$f" "$node:$SITE/models/$f"
         done
-        for f in generate.py tokenizer_utils.py; do
+        for f in generate.py server.py tokenizer_utils.py; do
             [ -f "$PATCHES/$f" ] && scp -q "$PATCHES/$f" "$node:$SITE/$f"
         done
         # In-place patches
-        for patcher in patch_server.py patch_utils.py; do
+        for patcher in patch_utils.py; do
             if [ -f "$PATCHES/$patcher" ]; then
                 scp -q "$PATCHES/$patcher" "$node:/tmp/$patcher"
                 ssh "$node" "$PYTHON /tmp/$patcher '$SITE/$(echo $patcher | sed s/patch_//)'" 2>/dev/null
