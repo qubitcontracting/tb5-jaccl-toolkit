@@ -78,27 +78,33 @@ NODES_LIST="local"
 
 for node in $NODES_LIST; do
     if [ "$node" = "local" ]; then
+        # Full-replace patches (version-independent)
         for f in pipeline.py qwen3_moe.py minimax.py; do
             [ -f "$PATCHES/$f" ] && cp "$PATCHES/$f" "$SITE/models/$f"
         done
-        for f in generate.py server.py tokenizer_utils.py; do
+        for f in generate.py tokenizer_utils.py; do
             [ -f "$PATCHES/$f" ] && cp "$PATCHES/$f" "$SITE/$f"
         done
-        if ! grep -q 'pipeline_warmup' "$SITE/utils.py" 2>/dev/null; then
-            $PYTHON "$PATCHES/patch_utils.py" "$SITE/utils.py"
-        fi
+        # In-place patches (version-independent)
+        [ -f "$PATCHES/patch_server.py" ] && $PYTHON "$PATCHES/patch_server.py" "$SITE/server.py"
+        [ -f "$PATCHES/patch_utils.py" ] && $PYTHON "$PATCHES/patch_utils.py" "$SITE/utils.py"
+        $PYTHON -c 'import psutil' 2>/dev/null || $PYTHON -m pip install psutil -q 2>/dev/null || true
         echo "  local: patched" | tee -a "$LOG"
     else
+        # Full-replace patches
         for f in pipeline.py qwen3_moe.py minimax.py; do
             [ -f "$PATCHES/$f" ] && scp -q "$PATCHES/$f" "$node:$SITE/models/$f"
         done
-        for f in generate.py server.py tokenizer_utils.py; do
+        for f in generate.py tokenizer_utils.py; do
             [ -f "$PATCHES/$f" ] && scp -q "$PATCHES/$f" "$node:$SITE/$f"
         done
-        if ! ssh "$node" "grep -q 'pipeline_warmup' '$SITE/utils.py'" 2>/dev/null; then
-            scp -q "$PATCHES/patch_utils.py" "$node:/tmp/patch_utils.py"
-            ssh "$node" "$PYTHON /tmp/patch_utils.py '$SITE/utils.py'" 2>/dev/null
-        fi
+        # In-place patches
+        for patcher in patch_server.py patch_utils.py; do
+            if [ -f "$PATCHES/$patcher" ]; then
+                scp -q "$PATCHES/$patcher" "$node:/tmp/$patcher"
+                ssh "$node" "$PYTHON /tmp/$patcher '$SITE/$(echo $patcher | sed s/patch_//)'" 2>/dev/null
+            fi
+        done
         ssh "$node" "$PYTHON -c 'import psutil' 2>/dev/null || $PYTHON -m pip install psutil -q" 2>/dev/null || true
         echo "  $node: patched" | tee -a "$LOG"
     fi

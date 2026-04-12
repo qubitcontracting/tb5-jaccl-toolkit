@@ -6,7 +6,7 @@ Distributed pipeline inference for large MoE models on Apple Silicon over Thunde
 
 | Component | Version |
 |-----------|---------|
-| mlx-lm | 0.31.1 |
+| mlx-lm | 0.31.1 / 0.31.2 (both tested) |
 | MLX | 0.31.1.dev20260328+ce45c52 (custom GID fix) |
 | Python | 3.14.3 (homebrew) |
 | macOS | 26.4 |
