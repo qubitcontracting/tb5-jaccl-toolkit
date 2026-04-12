@@ -129,33 +129,40 @@ if [ "$NODES" = "3" ]; then
 fi
 sleep 15
 
-# Up with correct IPs
-sudo ifconfig en3 10.0.1.1/24 up; sudo ifconfig en4 10.0.2.1/24 up
-ssh voldemort "sudo ifconfig en4 10.0.1.2/24 up; sudo ifconfig en3 10.0.3.1/24 up"
+# Up with correct IPs (only bring up interfaces needed for this config)
+sudo ifconfig en3 10.0.1.1/24 up  # vader↔voldemort (always)
+ssh voldemort "sudo ifconfig en4 10.0.1.2/24 up"  # voldemort↔vader (always)
 if [ "$NODES" = "3" ]; then
+    sudo ifconfig en4 10.0.2.1/24 up  # vader↔gargamel
+    ssh voldemort "sudo ifconfig en3 10.0.3.1/24 up"  # voldemort↔gargamel
     ssh gargamel "sudo ifconfig en4 10.0.2.2/24 up; sudo ifconfig en3 10.0.3.2/24 up"
 fi
 sleep 5
 
-# Verify RDMA
+# Verify RDMA (only check interfaces needed for this config)
 echo "Verifying RDMA..." | tee -a "$LOG"
 RDMA_OK=true
-for dev in rdma_en3 rdma_en4; do
-    state=$(ibv_devinfo -d $dev 2>/dev/null | grep -oE 'PORT_ACTIVE|PORT_DOWN')
-    echo "  vader:$dev = $state" | tee -a "$LOG"
+# vader:en3 ↔ voldemort:en4 (always needed for 2+ nodes)
+for pair in "vader rdma_en3" "voldemort rdma_en4"; do
+    node=$(echo $pair | cut -d' ' -f1)
+    dev=$(echo $pair | cut -d' ' -f2)
+    if [ "$node" = "vader" ]; then
+        state=$(ibv_devinfo -d $dev 2>/dev/null | grep -oE 'PORT_ACTIVE|PORT_DOWN')
+    else
+        state=$(ssh $node "ibv_devinfo -d $dev 2>/dev/null | grep -oE 'PORT_ACTIVE|PORT_DOWN'" 2>/dev/null)
+    fi
+    echo "  $node:$dev = $state" | tee -a "$LOG"
     [ "$state" != "PORT_ACTIVE" ] && RDMA_OK=false
 done
-for dev in rdma_en3 rdma_en4; do
-    state=$(ssh voldemort "ibv_devinfo -d $dev 2>/dev/null | grep -oE 'PORT_ACTIVE|PORT_DOWN'" 2>/dev/null)
-    echo "  voldemort:$dev = $state" | tee -a "$LOG"
-    [ "$state" != "PORT_ACTIVE" ] && RDMA_OK=false
-done
+# Additional links for 3-node
 if [ "$NODES" = "3" ]; then
-    for dev in rdma_en3 rdma_en4; do
-        state=$(ssh gargamel "ibv_devinfo -d $dev 2>/dev/null | grep -oE 'PORT_ACTIVE|PORT_DOWN'" 2>/dev/null)
-        echo "  gargamel:$dev = $state" | tee -a "$LOG"
-        [ "$state" != "PORT_ACTIVE" ] && RDMA_OK=false
-    done
+for pair in "vader rdma_en4" "voldemort rdma_en3" "gargamel rdma_en3" "gargamel rdma_en4"; do
+    node=$(echo $pair | cut -d' ' -f1)
+    dev=$(echo $pair | cut -d' ' -f2)
+    state=$(ssh $node "ibv_devinfo -d $dev 2>/dev/null | grep -oE 'PORT_ACTIVE|PORT_DOWN'" 2>/dev/null)
+    echo "  $node:$dev = $state" | tee -a "$LOG"
+    [ "$state" != "PORT_ACTIVE" ] && RDMA_OK=false
+done
 fi
 if ! $RDMA_OK; then
     echo "ERROR: RDMA not fully active. Aborting." | tee -a "$LOG"
