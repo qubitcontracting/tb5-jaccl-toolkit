@@ -71,27 +71,30 @@ if [ -z "$SITE" ]; then
 fi
 echo "Patching mlx_lm at $SITE..." | tee -a "$LOG"
 
-# Copy patched files (pipeline.py, qwen3_moe.py, generate.py) to all nodes
+# Copy ALL patched files to all nodes
 NODES_LIST="local"
 [ "$NODES" -ge 2 ] && NODES_LIST="$NODES_LIST voldemort"
 [ "$NODES" -ge 3 ] && NODES_LIST="$NODES_LIST gargamel"
 
 for node in $NODES_LIST; do
     if [ "$node" = "local" ]; then
-        for f in pipeline.py qwen3_moe.py; do
-            cp "$PATCHES/$f" "$SITE/models/$f"
+        for f in pipeline.py qwen3_moe.py minimax.py; do
+            [ -f "$PATCHES/$f" ] && cp "$PATCHES/$f" "$SITE/models/$f"
         done
-        cp "$PATCHES/generate.py" "$SITE/generate.py"
-        # Patch utils.py warmup call
+        for f in generate.py server.py tokenizer_utils.py; do
+            [ -f "$PATCHES/$f" ] && cp "$PATCHES/$f" "$SITE/$f"
+        done
         if ! grep -q 'pipeline_warmup' "$SITE/utils.py" 2>/dev/null; then
             $PYTHON "$PATCHES/patch_utils.py" "$SITE/utils.py"
         fi
         echo "  local: patched" | tee -a "$LOG"
     else
-        scp -q "$PATCHES/pipeline.py" "$node:$SITE/models/pipeline.py"
-        scp -q "$PATCHES/qwen3_moe.py" "$node:$SITE/models/qwen3_moe.py"
-        scp -q "$PATCHES/generate.py" "$node:$SITE/generate.py"
-        # Patch utils.py
+        for f in pipeline.py qwen3_moe.py minimax.py; do
+            [ -f "$PATCHES/$f" ] && scp -q "$PATCHES/$f" "$node:$SITE/models/$f"
+        done
+        for f in generate.py server.py tokenizer_utils.py; do
+            [ -f "$PATCHES/$f" ] && scp -q "$PATCHES/$f" "$node:$SITE/$f"
+        done
         if ! ssh "$node" "grep -q 'pipeline_warmup' '$SITE/utils.py'" 2>/dev/null; then
             scp -q "$PATCHES/patch_utils.py" "$node:/tmp/patch_utils.py"
             ssh "$node" "$PYTHON /tmp/patch_utils.py '$SITE/utils.py'" 2>/dev/null
