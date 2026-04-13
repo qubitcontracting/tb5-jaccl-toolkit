@@ -146,11 +146,11 @@ check_rdma() {
     local node=$1 dev=$2
     local state
     if [ "$node" = "$NODE_0" ]; then
-        state=$(ibv_devinfo -d "$dev" 2>/dev/null | grep -oE 'PORT_ACTIVE|PORT_DOWN')
+        state=$(timeout 10 ibv_devinfo -d "$dev" 2>/dev/null | grep -oE 'PORT_ACTIVE|PORT_DOWN')
     else
-        state=$(ssh "$node" "ibv_devinfo -d $dev 2>/dev/null | grep -oE 'PORT_ACTIVE|PORT_DOWN'" 2>/dev/null)
+        state=$(ssh -o ConnectTimeout=5 "$node" "timeout 10 ibv_devinfo -d $dev 2>/dev/null | grep -oE 'PORT_ACTIVE|PORT_DOWN'" 2>/dev/null)
     fi
-    echo "  $node:$dev = $state" | tee -a "$LOG"
+    echo "  $node:$dev = ${state:-TIMEOUT}" | tee -a "$LOG"
     [ "$state" != "PORT_ACTIVE" ] && RDMA_OK=false
 }
 
