@@ -6,7 +6,7 @@ Distributed pipeline inference for large MoE models on Apple Silicon over Thunde
 
 | Component | Version |
 |-----------|---------|
-| mlx-lm | 0.31.1 / 0.31.2 (both tested) |
+| mlx-lm | 0.31.2 (also tested 0.31.1) |
 | MLX | 0.31.1.dev20260328+ce45c52 (custom GID fix) |
 | Python | 3.14.3 (homebrew) |
 | macOS | 26.4 |
@@ -72,16 +72,15 @@ The script handles everything: patch deployment, RDMA bounce, device matrix, ser
 
 All in `patches/mlx-pipeline-qwen3/`:
 
-| File | Target | What it does |
-|------|--------|-------------|
-| `pipeline.py` | `models/pipeline.py` | Proportional memory split + `pipeline_warmup()` for Metal shader pre-compilation |
-| `qwen3_moe.py` | `models/qwen3_moe.py` | Adds PipelineMixin (recv/send/all_gather in forward pass) + `make_cache()` |
-| `minimax.py` | `models/minimax.py` | Same pipeline support for MiniMax models |
-| `generate.py` | `generate.py` | `_pipeline_sync()` in prefill and generation loops — forces all ranks to eval together |
-| `server.py` | `server.py` | **Critical:** `is_batchable = False` for pipeline models. Without this, server uses BatchGenerator which has no pipeline sync → GPU timeout |
-| `tokenizer_utils.py` | `tokenizer_utils.py` | Tokenizer fixes |
-| `patch_utils.py` | (helper) | Patches `utils.py` in-place to call `pipeline_warmup()` in `sharded_load()` |
-| `deploy.sh` | (helper) | Standalone deployment script for manual use |
+| File | Type | What it does |
+|------|------|-------------|
+| `pipeline.py` | Full replace → `models/pipeline.py` | Proportional memory split + `pipeline_warmup()` for Metal shader pre-compilation |
+| `qwen3_moe.py` | Full replace → `models/qwen3_moe.py` | Adds PipelineMixin (recv/send/all_gather in forward pass) + `make_cache()` |
+| `minimax.py` | Full replace → `models/minimax.py` | Same pipeline support for MiniMax models |
+| `patch_generate.py` | In-place patcher → `generate.py` | Adds `_pipeline_sync()` + prefill sync + generation loop sync (4 patches) |
+| `patch_server.py` | In-place patcher → `server.py` | Adds `is_batchable = False` for pipeline models |
+| `patch_utils.py` | In-place patcher → `utils.py` | Adds `pipeline_warmup()` call in `sharded_load()` |
+| `deploy.sh` | Helper | Standalone deployment script for manual use |
 
 ### Why server.py is Critical
 
@@ -95,11 +94,11 @@ if self.pipeline_group is not None:
 
 This forces the server to use the single-request `stream_generate` → `generate_step` path which has our pipeline sync patches.
 
-### Version Compatibility Note
+### Version Compatibility
 
-The toolkit's `server.py` is based on 0.31.1. Stock 0.31.2's `server.py` has a `rfind_think_start` bug with Qwen3 tokenizers and is NOT used. The toolkit's `generate.py` is stock 0.31.2 with `_pipeline_sync` patches applied in-place — this preserves `BatchGenerator` compatibility for single-node mode.
+All patches are **in-place** and **version-independent**. No full file copies — the patchers find specific patterns in stock code and insert pipeline support. Tested on 0.31.1 and 0.31.2; should work on future versions as long as the matched patterns exist.
 
-Single-node mode restores stock mlx_lm via `pip install --force-reinstall` before launching, because the toolkit's 0.31.1 `server.py` calls `BatchGenerator` with arguments that don't exist in 0.31.2's `generate.py`.
+Single-node mode works with patched files — `_pipeline_sync` returns `None` when `group.size() == 1`, and `is_batchable` override only triggers when `pipeline_group is not None`.
 
 ### Why pipeline_warmup() is Needed
 
